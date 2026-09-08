@@ -1,439 +1,952 @@
-# The Reconciliation Problem
+Reconciliation App
 
-A small web application that reconciles our own trade ledger against a
-counterparty's statement: it imports both sides, matches transactions
-between them, flags what disagrees (and by how much), excludes what should
-never be compared, and gives a person a screen to resolve by hand whatever
-the system couldn't match automatically - with those decisions holding on
-every future run.
+A transaction reconciliation system that compares an internal trade ledger with a counterparty statement, identifies discrepancies, handles exceptions, and preserves human reconciliation decisions across future runs.
 
-## What it does
+1. Overview
 
-- **Imports** CSV files from either system, normalizing different column
-  names, different date formats, and different vocabularies (BUY/B,
-  SELL/S) into one common shape.
-- **Detects duplicate file uploads** (by content, not filename) and applies
-  **correction files** (a resend where a few rows' values changed) while
-  preserving the old values in history.
-- **Matches** ledger transactions to statement transactions by their shared
-  ID, deterministically and one-to-one, excluding cancelled transactions
-  entirely.
-- **Compares** every matched pair field by field, distinguishing an exact
-  match, a match within tolerance (normal rounding/fee/clock drift), and a
-  real discrepancy - reporting both values and the delta for anything that
-  differs.
-- Surfaces whatever's **left over on either side** (a ledger row with no
-  statement counterpart, or vice versa) for a person to resolve.
-- Lets a person **manually pair** two transactions the system couldn't
-  match, or **accept** a row as genuinely having no pair - and that
-  decision **persists**: every future reconciliation run honors it.
+The Reconciliation App is a small web application built to solve a common financial operations problem: two independent systems record the same transactions, but their records may differ.
 
-## Stack
+Differences can occur because of:
 
-- Python 3.12, Flask (thin HTTP layer), SQLAlchemy 2.0 (ORM + schema),
-  SQLite (file-based, zero setup).
-- Plain server-rendered Jinja templates, no JS framework.
-- pytest for tests (122 tests: pure-logic unit tests, DB-integration tests,
-  and end-to-end tests driving the actual Flask app through its test client
-  against a real SQLite file).
+Different column names and data formats
 
-No other runtime dependencies - requirements.txt is exactly Flask,
-SQLAlchemy, and pytest.
+Different date/time formats
 
-## Setup
+Different transaction vocabulary, such as BUY vs B
 
-```bash
-pip install -r requirements.txt --break-system-packages   # or use a venv
-```
+Rounding or small fee differences
 
-## How to run
+Clock differences between systems
 
-```bash
-python scripts/migrate.py     # 1. apply migrations (creates recon.db)
-python app.py                 # 2. run the app -> http://127.0.0.1:5000
-```
+Missing transactions on either side
 
-## How to run tests
+Corrections to previously imported transactions
 
-```bash
-python -m pytest              # all 122 tests
-python -m pytest -v           # with individual test names
-python -m pytest tests/test_matching_core.py   # just the pure engine
-```
+Duplicate file submissions
 
-### Walking through the workflow
+Transactions that require a human decision
 
-1. Open http://127.0.0.1:5000/ - the dashboard. Empty at first.
-2. **Import files**: go to "Import files", upload data/sample/ledger_2025-07.csv
-   (source LEDGER) and data/sample/statement_2025-07.csv (STATEMENT, or
-   leave the format on auto-detect).
-3. Back on the dashboard, click **"Run reconciliation now"**.
-4. You land on the run's results page: filter pills for every status
-   (Differs / Unmatched-ours / Unmatched-counterparty / Tolerance /
-   Manually resolved / Matched), and a sort control ("needs attention
-   first", transaction ID, or largest difference).
-5. Click any row to open its **transaction detail page**: our ledger and
-   the counterparty's statement side by side, a field-by-field table
-   showing both values, the delta, the tolerance that applied, and whether
-   it's within tolerance or not.
-6. For an unmatched row (e.g. ledger T-1004, which has no statement
-   counterpart by ID), the detail page offers a resolution form: pick a
-   candidate from the other side's still-unmatched rows in this run
-   (C-9001 is exactly this case - it's the assignment's own example) and
-   submit, or accept it as genuinely unmatched. Either way you give your
-   name and, optionally, a note.
-7. Submitting immediately re-runs reconciliation and takes you to the new
-   run, filtered to "Manually resolved," so you see the decision reflected
-   right away.
-8. Click **"Run reconciliation now"** again from the dashboard - the
-   resolution still shows as manually resolved in the new run, proving it
-   persisted rather than being a one-off patch to a single run's results.
-9. Try data/sample/ledger_2025-07_correction.csv - a same-batch resend
-   that fixes one row's quantity. Re-run reconciliation and open that row's
-   detail page: a "Correction history" table appears showing the old value,
-   the new (current) value, and which file changed it.
+The application provides a workflow for importing both files, reconciling the transactions, understanding discrepancies, and manually resolving exceptions.
 
-## Architecture
+The main goal is not simply to report that two files are different, but to make it clear what differs, by how much, why it matters, and what action is required.
 
-```
-app.py                      Flask entrypoint
-src/
-  config.py                 DB URL, tolerances (AMOUNT_TOLERANCE, TIME_TOLERANCE_SECONDS)
-  db.py                     engine/session
-  models.py                 schema (see "Database design" below)
-  ingestion/                pure parsing & normalization - no DB, no Flask
-    base.py                 SourceParser interface, NormalizedRow, ParseResult, RowError
-    normalize.py            field-level normalizers (side, state, timestamp, decimal)
-    ledger_parser.py        our ledger's CSV format
-    statement_parser.py     the counterparty's CSV format
-    registry.py             format lookup + auto-detection (the "third source" extension point)
-  matching/
-    core.py                 pure reconciliation engine - no DB, no Flask
-  services/
-    import_service.py       DB-aware: hashing, duplicate detection, upsert/versioning
-    reconciliation_service.py  runs the matching engine, persists a run
-    resolution_service.py   manual match/accept, with validation guards
-    view_service.py         read-model queries for the UI (computes nothing itself)
-  web/
-    routes.py                thin controllers: dashboard, imports, runs, results, resolve
-    templates/
-      base.html, dashboard.html, imports.html, run_detail.html, result_detail.html
-migrations/
-  0001_initial.sql           generated from models.py (see "Migrations" below)
-scripts/
-  generate_migration.py      regenerate a migration from the current models
-  migrate.py                 apply pending migrations, tracked in schema_migrations
-data/sample/                 sample CSVs covering the scenarios below
-tests/
-  test_normalize.py                pure normalizer unit tests
-  test_parsers.py                  parser unit tests, incl. a worked third-source example
-  test_import_service.py           duplicate detection, correction/versioning, malformed files
-  test_matching_core.py            pure reconciliation engine unit tests (32 tests)
-  test_reconciliation_service.py   DB-integration: runs, corrections, history
-  test_resolution_service.py       DB-integration: manual resolution guards + persistence
-  test_web_workflow.py             end-to-end: full Flask app through its test client
-```
+2. Key Features
 
-The dependency direction is one-way: web depends on services, which
-depend on matching/ingestion/models, which depend on nothing else in
-the app. Nothing in matching/core.py or ingestion/* touches a database
-or HTTP request - both are tested with nothing but plain Python values.
+File ingestion and normalization
 
-## Database design
+Imports CSV files from both systems.
 
-- **source_files** - one row per uploaded file. content_hash (sha256 of
-  the raw bytes) is unique (enforced at the database level, not just in
-  application code) - nullable so that a file recognized as a duplicate can
-  still be recorded (with status=DUPLICATE) without needing a synthetic
-  hash value of its own. Tracks row counts (created / corrected / unchanged
-  / failed) and overall status.
-- **transactions** - the *current* view of one trade as seen by one
-  system (LEDGER or STATEMENT), keyed on (source_system, natural_key)
-  where natural_key is the trade_id / reference. This is the row the
-  matching engine pairs up.
-- **transaction_versions** - every value a transaction has ever held. A
-  correction file that changes a monetary/timing field closes the current
-  version (effective_to) and opens a new one, rather than overwriting
-  history - this is what answers "what did this row used to say?".
-- **reconciliation_runs** - one row per reconciliation pass, with
-  per-status counts (matched / matched-within-tolerance / differs /
-  unmatched-ledger / unmatched-statement / manually-resolved /
-  cancelled-excluded).
-- **reconciliation_results** - one row per pairing (or lack of one)
-  produced by a run: which ledger transaction was paired with which
-  statement transaction, or which side was left over, and the resulting
-  status.
-- **field_differences** - one row per field that disagreed on a matched
-  pair: both values, the delta, and whether it was significant (outside
-  tolerance) or not.
-- **manual_resolutions** - deliberately keyed on Transaction ids, not on
-  a ReconciliationResult (which only exists for one run and gets
-  regenerated every time). ledger_transaction_id and
-  statement_transaction_id are each unique (enforced at the database
-  level): a transaction can be covered by at most one manual decision, ever.
+Supports different column names and file formats.
 
-## Migrations
+Normalizes transaction direction values such as BUY / B and SELL / S.
 
-src/models.py is the single source of truth for the schema.
-scripts/generate_migration.py emits the current models' CREATE TABLE
-and CREATE INDEX statements into a numbered file under migrations/, and
-scripts/migrate.py applies whichever migration files haven't been applied
-yet, tracked in a schema_migrations table - so "run migrations" is an
-explicit, repeatable step rather than implicit create_all() magic. A
-longer-lived project would use Alembic for proper incremental/versioned
-migrations; that felt like more machinery than this project needs, since
-the schema hasn't diverged from the models.
+Normalizes timestamps into a common representation.
 
-## Ingestion design
+Parses monetary values and quantities using Decimal.
 
-src/ingestion has no dependency on SQLAlchemy or Flask. A SourceParser
-takes raw CSV text and returns a ParseResult (NormalizedRow list +
-RowError list) - pure functions, unit tested with plain strings.
+Validates malformed rows and reports row-level errors.
 
-src/services/import_service.py is the DB-aware layer on top: it hashes
-the file, checks for a duplicate, calls the parser, then upserts
-Transaction/TransactionVersion rows.
+Uses an extensible parser architecture so another source format can be added without changing the reconciliation engine.
 
-**Adding a third source format** means: implement SourceParser (one
-parse() method), give it an expected_columns tuple for auto-detection,
-and register it with register_parser(). Nothing else changes - the import
-service, the matching engine, and the UI are all format-agnostic; they only
-ever see NormalizedRow. tests/test_parsers.py::TestThirdSourceExtensibility
-is a complete worked example: a hypothetical pipe-delimited third exchange,
-implemented and registered in about 30 lines, producing the same normalized
-shape (BUY, not B) as the other two.
+Reconciliation
 
-## Reconciliation algorithm
+The system distinguishes between:
 
-src/matching/core.py::run_matching is the whole algorithm, in one place,
-independently testable without a browser, HTTP, or a database
-(tests/test_matching_core.py, 32 tests):
+Matched — all compared fields agree.
 
-1. **Cancelled transactions are excluded first**, on both sides, before
-   anything else runs. They never appear in a result, never count toward
-   any total, and can never be manually matched (enforced again at the
-   resolution_service layer - cancelled transactions can't be manually
-   resolved either).
-2. **Manual decisions are applied next**, ahead of automatic matching,
-   because a human's prior call always wins - and because manual decisions
-   are how the system supports pairing two transactions with *different*
-   IDs (the assignment's own C-9001 example: a statement-only row with no
-   matching ledger ID at all).
-3. **Everything left is auto-matched by natural_key.** Since Transaction
-   enforces uniqueness on (source_system, natural_key) at the database
-   level, at most one ledger row and one statement row can ever share a
-   given key - so this pairing is always deterministic and one-to-one; there
-   is never a choice between candidates to get wrong.
-4. Each pair is compared field by field
-   (instrument, side, quantity, price, gross_amount,
-   transacted_at, state). A pair with **zero** differing fields is
-   MATCHED. A pair with differing fields, none of which exceed their
-   tolerance, is MATCHED_WITHIN_TOLERANCE. A pair with **any** field
-   outside its tolerance is DIFFERS - and every differing field is
-   reported with both values and the delta, whether or not it was
-   significant, so a person can see the full picture, not just the verdict.
-5. **Whatever's left over on one side only** is UNMATCHED_LEDGER or
-   UNMATCHED_STATEMENT.
-6. **Ambiguity is refused, not guessed at.** If the data ever contains two
-   conflicting manual instructions about the same transaction - which
-   resolution_service prevents from ever being persisted in the first
-   place, but the engine checks independently as defense in depth - neither
-   is honored; the transaction falls through to normal matched/unmatched
-   handling instead of the engine arbitrarily picking one. Ledger-side and
-   statement-side IDs are independent namespaces, so this check never
-   cross-contaminates: a ledger ID and a statement ID that happen to share
-   the same string are never treated as conflicting with each other.
+Matched within tolerance — differences exist but are within configured tolerance.
 
-## Tolerance decisions
+Differs — at least one meaningful difference exceeds the configured tolerance.
 
-Configured in src/config.py: AMOUNT_TOLERANCE = 0.01 (currency units),
-TIME_TOLERANCE_SECONDS = 60. Both are inclusive at the boundary - a delta
-*equal to* the tolerance is normal drift, not a problem - and both are
-environment-overridable (RECON_AMOUNT_TOLERANCE,
-RECON_TIME_TOLERANCE_SECONDS).
+Unmatched – Ledger — a ledger transaction has no statement counterpart.
 
-Applied per field: quantity has **zero** tolerance (there's no
-rounding/fee rationale for a quantity to drift, unlike a price or amount);
-price and gross_amount each use the amount tolerance; transacted_at
-uses the time tolerance; instrument, side, and state require an exact
-match (there's no meaningful "close enough" for an instrument symbol or
-buy/sell direction).
+Unmatched – Counterparty — a statement transaction has no ledger counterpart.
 
-## Duplicate handling
+Manually resolved — a human has previously made a reconciliation decision.
 
-A file is a duplicate if its raw bytes produce a sha256 hash that's already
-been imported - filename doesn't matter, so a renamed resend is still
-caught. This is enforced at the database level via a unique index on
-content_hash, not only in application logic. A file recognized as a
-duplicate is recorded (status=DUPLICATE, pointing at the original file's
-ID in error_summary) but its rows are never processed, so re-uploading
-the same file any number of times never creates duplicate transactions.
+Cancelled transactions are excluded from reconciliation because they are not intended to be compared.
 
-**Known limitation**: duplicate detection is by file content, not by
-current database state. If a file is imported, then a *later* file
-corrects one of its rows, then the *original* file's exact bytes are
-re-uploaded intending to revert that correction - the system will
-(correctly, by its own definition) recognize it as a duplicate of the
-*first* upload and skip it, leaving the correction in place rather than
-reverting it. Reverting a correction requires uploading a file with the
-corrected-back values that isn't byte-identical to a prior upload. This
-wasn't a scenario the assignment describes, and handling it would mean
-redesigning duplicate detection around current values rather than file
-content - a meaningfully bigger and more complex model for a case that may
-never come up.
+Duplicate file handling
 
-## Correction / version handling
+Files are identified using a SHA-256 hash of their raw contents rather than their filename.
 
-A file is not a special "correction file" that has to be labeled as such
-by whoever uploads it - it's a normal import, and a *correction* is
-something the system detects by diffing each row against the transaction's
-current values. Any existing (source_system, natural_key) whose new
-values differ from what's currently stored is a correction; the file as a
-whole is flagged is_correction=True if at least one row was.
+This means:
 
-When a row is corrected, the *current* TransactionVersion is closed
-(effective_to set to the new file's import time) and a new version is
-opened holding the new values - nothing is overwritten or deleted. The
-Transaction row's own columns always mirror the latest version, so
-reconciliation automatically uses current values with no special-casing.
-Re-sending a file where a row's values are unchanged is a no-op (counted as
-unchanged, no new version).
+Uploading the exact same file twice is detected.
 
-## Manual resolution behavior
+Renaming a duplicate file does not bypass duplicate detection.
 
-Two operations, both in src/services/resolution_service.py:
+Duplicate files do not create duplicate transactions.
 
-- **create_manual_match**: pair one ledger transaction with one statement
-  transaction. Rejects: either transaction not existing, being on the wrong
-  side (two ledger transactions, say), being CANCELLED, or already being
-  covered by an earlier manual resolution.
-- **create_manual_accept_unmatched**: confirm that a transaction
-  genuinely has no counterpart. Same guards, minus the "wrong side" check
-  (there's only one transaction involved).
+Correction and version history
 
-Both guards are enforced twice: once in application code (with a clear
-error message), and once at the database level via a unique constraint on
-each transaction-id column - the second is a narrow-race-condition backstop
-(two near-simultaneous requests both passing the application check before
-either commits), surfaced through the same clean error rather than an
-unhandled server error if it's ever what actually catches the conflict.
+If a later file contains a changed version of an existing transaction:
 
-Resolutions are stored independently of any specific run, keyed on the
-underlying transactions. The matching engine reloads every manual
-resolution fresh each time it runs and applies it *before* auto-matching -
-so a decision made today is automatically honored in every future run
-without any extra step, which is exactly what the assignment asks for
-("whatever they decide must still hold tomorrow"). Submitting a resolution
-through the UI immediately triggers a new reconciliation run so the
-decision is visibly reflected right away, rather than only taking effect
-the next time someone happens to click "run reconciliation."
+The current transaction is updated.
 
-## The UI
+The previous value is retained in transaction history.
 
-Thin Flask routes (src/web/routes.py) over a read-model service
-(src/services/view_service.py) that assembles what's already been
-persisted into plain dicts for the templates - it computes nothing about
-matching or differences itself; that stays entirely in
-src/matching/core.py. Routes validate their inputs (empty/missing file,
-unknown source system, non-UTF-8 file, empty resolver name, invalid
-transaction id, unknown run/result id) and turn failures into a flashed
-message and a redirect rather than a 500.
+The system records the correction.
 
-- **Dashboard** (/) - latest run's status counts as cards, full run
-  history table, current import counts, and the "run reconciliation now"
-  button.
-- **Import** (/imports) - upload form + import history table.
-- **Run results** (/runs/<id>) - filter pills for every status, a sort
-  control, and a table. "Needs attention first" is the default sort because
-  that's what someone opening this screen each morning actually wants to
-  see without hunting for it.
-- **Transaction detail** (/results/<id>) - our ledger and the
-  counterparty's statement side by side; a field-by-field table with both
-  values, the delta, the tolerance that applied, and a plain-language
-  verdict; the manual resolution record if one exists; a resolution form if
-  the result is eligible (unmatched-on-one-side only); and a
-  correction-history table per side, shown only when a side actually has
-  more than one version.
-- **Manual resolution** (POST /results/<id>/resolve) - validates the
-  result is actually eligible, requires a name, accepts an optional note,
-  and either matches with a chosen candidate (drawn from the other side's
-  still-unmatched rows in the same run) or accepts the row as genuinely
-  unmatched. On success it immediately re-runs reconciliation and redirects
-  into the new run filtered to "Manually resolved." On failure it flashes
-  the service layer's error and returns to the same page with nothing
-  written.
+Reconciliation uses the latest effective version.
 
-## Assumptions and decisions
+Users can inspect what the transaction previously contained.
 
-- **Timestamps** are normalized to UTC and stored as naive datetimes.
-  SQLite has no native timezone-aware datetime type, so rather than have
-  SQLAlchemy silently strip timezone info in a way that's easy to get wrong
-  later, the app is explicit: everything in the database is UTC by
-  convention, and the one conversion point is in import_service.py.
-- **A timestamp with no offset is assumed to already be UTC** - this
-  matches the statement format in the assignment's own example
-  (2025-07-01 09:15:00, no Z, no offset).
-- **Unrecognized side/direction values are a hard error** for that row
-  (reported, row skipped) - BUY/B/SELL/S are the only values in the
-  spec, and anything else likely indicates real data corruption worth
-  surfacing rather than guessing at.
-- **Unrecognized status/state values are preserved verbatim**, not
-  collapsed into a shared "unknown" bucket - a settlement status this app
-  doesn't recognize isn't necessarily bad data (a third source will have
-  its own vocabulary), and two different unrecognized statuses must never
-  be able to compare as equal just because neither was recognized.
-- **"Correction file" is an outcome, not a flag** the uploader sets - see
-  "Correction / version handling" above.
-- **Duplicate detection is content-based** (sha256 of the raw file), not
-  filename-based - see "Duplicate handling" above for the one documented
-  edge case this implies.
-- **Money and quantities are Decimal**, never float, from the moment
-  they're parsed out of a CSV cell, specifically so tolerance comparisons
-  are exact rather than subject to binary floating-point rounding.
-- **SQLite** over Postgres/MySQL: zero setup, matches "any database" in the
-  brief, and nothing here needs concurrent writers.
-- **No authentication.** The person's name is a free-text field on the
-  resolution form (used for the audit trail - who resolved what, and
-  when), not a login. Out of scope for a take-home.
+Manual resolution
 
-## Sample data (data/sample/)
+When automatic matching cannot determine a counterpart, a user can:
 
-- ledger_2025-07.csv / statement_2025-07.csv - a normal day's matched
-  files, covering: an exact match (T-1001), an in-tolerance amount rounding
-  difference (T-1002, $0.01), an in-tolerance timing drift (T-1003, 30s),
-  two ledger-only rows with no statement counterpart (T-1004, T-1010), a
-  real price discrepancy (T-1005), a real timing discrepancy (T-1006), a
-  cancelled trade appearing on both sides (T-1007), and a statement-only
-  row with no ledger counterpart (C-9001, taken directly from the
-  assignment's own example).
-- ledger_2025-07_correction.csv - same batch resent with T-1008's
-  quantity and gross_amount fixed; every other row identical.
-- statement_2025-07_correction.csv - same idea from the statement side:
-  T-1002's rounding fixed, T-1005's price corrected to match the ledger.
-- ledger_2025-07-05_malformed.csv - five rows, three intentionally broken
-  (unrecognized side value, non-numeric quantity, missing timestamp) to
-  exercise partial-import / row-level error handling.
+Manually pair two transactions.
 
-## What was intentionally left out
+Accept a transaction as genuinely unmatched.
 
-- **Pagination** on the results page - it renders every row for a run. Fine
-  at this sample data's scale; a production system reconciling thousands of
-  trades a day would want it.
-- **Authentication** - out of scope for a take-home; the "who resolved
-  this" trail is a free-text name field, not a real identity.
-- **Non-CSV formats** - the assignment only asks for CSV.
-- **Alembic-style incremental migrations** - see "Migrations" above for why
-  a generated single migration file was the right amount of machinery here.
-- **Reverting a correction by re-uploading a prior file's exact bytes** -
-  see the documented limitation under "Duplicate handling."
+Manual decisions are stored independently of a specific reconciliation run, meaning a decision made today continues to apply to future runs.
 
-## What would be built next
+3. Technology Stack
 
-- A way to undo/edit a manual resolution (currently the only way to change
-  one is to act on the underlying data differently - e.g. correct a value
-  - since a transaction that's already resolved is deliberately locked from
-  being resolved again).
-- Pagination and a search box on the results page for larger datasets.
-- A CSV/PDF export of a run's results, for sharing outside the app.
-- Bulk actions (e.g. "accept all of these as unmatched") for mornings with
-  many small unmatched rows.
+Component
+
+Technology
+
+Language
+
+Python 3.12
+
+Web framework
+
+Flask
+
+ORM / Database layer
+
+SQLAlchemy 2.0
+
+Database
+
+SQLite
+
+Templates
+
+Jinja / server-rendered HTML
+
+Testing
+
+pytest
+
+API / frontend framework
+
+None required
+
+Migrations
+
+Lightweight custom migration system
+
+The application intentionally uses a simple stack suitable for a take-home assignment. SQLite provides a zero-configuration database while Flask and server-rendered templates keep the application easy to understand and review.
+
+4. Architecture
+
+The application follows a layered structure:
+
+Browser
+   │
+   ▼
+Flask Web Routes
+   │
+   ▼
+Application Services
+   │
+   ├── Import Service
+   ├── Reconciliation Service
+   ├── Resolution Service
+   └── View Service
+   │
+   ├───────────────┐
+   ▼               ▼
+Ingestion      Matching Engine
+   │               │
+   └───────┬───────┘
+           ▼
+        Database
+
+A key architectural decision is that the reconciliation engine is independent of Flask and the database.
+
+This makes the most important business logic easy to test using plain Python values.
+
+5. Project Structure
+
+recon/
+│
+├── app.py
+├── requirements.txt
+├── pytest.ini
+├── README.md
+├── .gitignore
+│
+├── data/
+│   └── sample/
+│       ├── ledger_2025-07.csv
+│       ├── statement_2025-07.csv
+│       ├── ledger_2025-07_correction.csv
+│       ├── statement_2025-07_correction.csv
+│       └── ledger_2025-07-05_malformed.csv
+│
+├── migrations/
+│   └── 0001_initial.sql
+│
+├── scripts/
+│   ├── generate_migration.py
+│   └── migrate.py
+│
+├── src/
+│   ├── config.py
+│   ├── db.py
+│   ├── models.py
+│   │
+│   ├── ingestion/
+│   │   ├── base.py
+│   │   ├── normalize.py
+│   │   ├── ledger_parser.py
+│   │   ├── statement_parser.py
+│   │   └── registry.py
+│   │
+│   ├── matching/
+│   │   └── core.py
+│   │
+│   ├── services/
+│   │   ├── import_service.py
+│   │   ├── reconciliation_service.py
+│   │   ├── resolution_service.py
+│   │   └── view_service.py
+│   │
+│   └── web/
+│       ├── routes.py
+│       └── templates/
+│           ├── base.html
+│           ├── dashboard.html
+│           ├── imports.html
+│           ├── run_detail.html
+│           └── result_detail.html
+│
+└── tests/
+    ├── test_normalize.py
+    ├── test_parsers.py
+    ├── test_import_service.py
+    ├── test_matching_core.py
+    ├── test_reconciliation_service.py
+    ├── test_resolution_service.py
+    └── test_web_workflow.py
+
+Dependency direction
+
+The dependency direction is intentionally one-way:
+
+Web
+ ↓
+Services
+ ↓
+Matching / Ingestion / Models
+
+The matching and ingestion layers do not depend on HTTP requests or database sessions.
+
+6. Reconciliation Workflow
+
+The typical morning workflow is:
+
+Import files
+     ↓
+Start reconciliation
+     ↓
+Normalize transactions
+     ↓
+Apply existing manual decisions
+     ↓
+Exclude cancelled transactions
+     ↓
+Automatically match transactions
+     ↓
+Compare matched transactions
+     ↓
+Apply tolerances
+     ↓
+Generate reconciliation results
+     ↓
+Review exceptions
+     ↓
+Manually resolve remaining items
+     ↓
+Run again when required
+
+Example
+
+Suppose the ledger contains:
+
+T-1002 | BTC-USD | BUY | 0.50 | 62000.00
+
+and the counterparty statement contains:
+
+T-1002 | BTC-USD | B | 0.50 | 62000.01
+
+The parser first normalizes B to BUY.
+
+The amount difference is then evaluated against the configured tolerance.
+
+If the difference is within tolerance, the result is reported as:
+
+Matched within tolerance
+
+rather than being treated as a failure.
+
+This allows normal operational drift to be separated from genuine reconciliation problems.
+
+7. Matching Algorithm
+
+The matching algorithm is implemented in:
+
+src/matching/core.py
+
+The function run_matching contains the core reconciliation logic and can be tested without a database or browser.
+
+Step 1 — Exclude cancelled transactions
+
+Cancelled transactions are removed from the comparison process on both sides.
+
+They:
+
+Do not produce reconciliation results.
+
+Do not contribute to reconciliation counts.
+
+Cannot be manually reconciled.
+
+Step 2 — Apply previous manual decisions
+
+Previously stored manual decisions are applied before automatic matching.
+
+This is important because a human decision should continue to be respected on future reconciliation runs.
+
+It also allows the system to handle transactions whose IDs differ between systems.
+
+Step 3 — Automatic matching
+
+Remaining transactions are automatically matched using their normalized natural key, which corresponds to the transaction ID/reference for the respective source.
+
+The database enforces uniqueness for:
+
+(source_system, natural_key)
+
+This provides deterministic one-to-one matching.
+
+Step 4 — Field comparison
+
+Matched transactions are compared field by field:
+
+Instrument
+
+Side
+
+Quantity
+
+Price
+
+Gross amount
+
+Timestamp
+
+State
+
+Step 5 — Tolerance evaluation
+
+Each field is evaluated against its appropriate tolerance.
+
+The result becomes:
+
+MATCHED
+MATCHED_WITHIN_TOLERANCE
+DIFFERS
+
+Step 6 — Remaining transactions
+
+Anything not matched is classified as:
+
+UNMATCHED_LEDGER
+UNMATCHED_STATEMENT
+
+The UI then allows a user to resolve those exceptions manually.
+
+8. Tolerance Rules
+
+The current defaults are:
+
+AMOUNT_TOLERANCE = 0.01
+TIME_TOLERANCE_SECONDS = 60
+
+They can be overridden using environment variables:
+
+RECON_AMOUNT_TOLERANCE
+RECON_TIME_TOLERANCE_SECONDS
+
+The tolerance boundary is inclusive.
+
+For example, with a time tolerance of 60 seconds:
+
+60 seconds difference → acceptable
+61 seconds difference → discrepancy
+
+Field-specific rules
+
+Field
+
+Tolerance
+
+Quantity
+
+None
+
+Price
+
+Amount tolerance
+
+Gross amount
+
+Amount tolerance
+
+Timestamp
+
+Time tolerance
+
+Instrument
+
+Exact
+
+Side
+
+Exact
+
+State
+
+Exact
+
+Decimal is used for monetary values and quantities instead of binary floating-point numbers.
+
+9. Duplicate File Handling
+
+A file is considered a duplicate when its raw contents generate a SHA-256 hash that has already been imported.
+
+Therefore:
+
+ledger.csv
+ledger-copy.csv
+renamed-ledger.csv
+
+will still be identified as the same file if their contents are identical.
+
+The database also enforces the uniqueness constraint, providing protection beyond the application-level check.
+
+A duplicate upload is recorded as a duplicate import, but its rows are not processed again.
+
+Known limitation
+
+Duplicate detection is intentionally content-based.
+
+If an original file is uploaded, then a correction is uploaded, and later the exact original bytes are uploaded again, the original file will still be recognized as a duplicate.
+
+Reverting a correction therefore requires a new file containing the desired values rather than the exact bytes of an earlier file.
+
+This behavior is documented rather than hidden because changing the definition of duplicate detection would require a more complex data model.
+
+10. Correction and Version History
+
+A correction is treated as an outcome of importing a file rather than as a special file type.
+
+When an existing transaction is imported with changed values:
+
+Previous Version
+       ↓
+   correction
+       ↓
+Current Version
+
+The previous version remains stored.
+
+The application therefore supports both:
+
+Current value — what reconciliation should use now.
+
+Historical value — what the transaction previously contained.
+
+Unchanged rows do not create unnecessary new versions.
+
+This provides a basic audit trail without introducing unnecessary infrastructure.
+
+11. Manual Resolution
+
+Manual resolution is implemented in:
+
+src/services/resolution_service.py
+
+There are two supported operations.
+
+Manual match
+
+A user can pair:
+
+Ledger transaction
+        +
+Statement transaction
+
+The application validates that:
+
+Both transactions exist.
+
+They belong to different source systems.
+
+Neither is cancelled.
+
+Neither has already been manually resolved.
+
+Accept as unmatched
+
+A user can also confirm that a transaction genuinely has no counterpart.
+
+The resolution records:
+
+The transaction(s)
+
+Resolver name
+
+Timestamp
+
+Optional note/reason
+
+Manual resolutions are linked to the underlying transactions rather than to a single reconciliation run.
+
+This means:
+
+Run 1
+  ↓
+Transaction unmatched
+  ↓
+Human resolves it
+  ↓
+Run 2
+  ↓
+Same decision is still respected
+
+12. Database Design
+
+The primary tables are:
+
+source_files
+
+Stores uploaded file metadata, including:
+
+Source system
+
+Filename
+
+SHA-256 content hash
+
+Import status
+
+Row counts
+
+Correction information
+
+transactions
+
+Stores the current effective version of each transaction.
+
+transaction_versions
+
+Stores every historical version of a transaction.
+
+This prevents corrections from destroying previous values.
+
+reconciliation_runs
+
+Stores each reconciliation execution and its summary counts.
+
+reconciliation_results
+
+Stores the result for each matched or unmatched transaction.
+
+field_differences
+
+Stores field-level discrepancies, including both values, deltas, and tolerance significance.
+
+manual_resolutions
+
+Stores human decisions independently from individual reconciliation runs.
+
+13. User Interface
+
+The application contains a simple server-rendered interface focused on the morning reconciliation workflow.
+
+Dashboard
+
+The dashboard provides:
+
+Latest reconciliation run
+
+Status counts
+
+Run history
+
+Import information
+
+Start reconciliation action
+
+Import page
+
+Users can:
+
+Upload ledger files
+
+Upload statement files
+
+View import history
+
+See duplicate or failed imports
+
+Results page
+
+Users can:
+
+Filter by reconciliation status
+
+Sort results
+
+Identify items requiring attention
+
+Open individual reconciliation results
+
+Transaction detail
+
+The detail page shows:
+
+Ledger transaction
+
+Counterparty transaction
+
+Field-by-field comparison
+
+Both values
+
+Difference/delta
+
+Applied tolerance
+
+Current resolution status
+
+Correction history when available
+
+Manual resolution
+
+For eligible unmatched transactions, the user can:
+
+Select a candidate transaction
+
+Manually pair it
+
+Accept it as genuinely unmatched
+
+Provide their name
+
+Add an optional note
+
+14. Testing
+
+The project uses pytest.
+
+The test suite covers the most important business behavior rather than only testing HTTP routes.
+
+Current test coverage includes:
+
+Normalization
+
+CSV parsing
+
+Malformed input
+
+Duplicate detection
+
+Correction/version handling
+
+Matching logic
+
+Tolerance behavior
+
+Cancelled transactions
+
+Unmatched transactions
+
+Manual resolution
+
+Database integration
+
+End-to-end Flask workflows
+
+The reconciliation engine has dedicated pure-logic tests so its behavior can be validated without starting the web application.
+
+Run the full suite with:
+
+python -m pytest
+
+For verbose output:
+
+python -m pytest -v
+
+To focus on the reconciliation engine:
+
+python -m pytest tests/test_matching_core.py
+
+15. Setup
+
+Requirements
+
+Python 3.12+
+
+pip
+
+No external database server is required.
+
+Installation
+
+Create and activate a virtual environment:
+
+Windows
+
+python -m venv .venv
+.venv\Scripts\activate
+
+macOS / Linux
+
+python3 -m venv .venv
+source .venv/bin/activate
+
+Install dependencies:
+
+pip install -r requirements.txt
+
+16. Running the Application
+
+From the project root:
+
+python scripts/migrate.py
+
+This creates/applies the database migrations.
+
+Then start the application:
+
+python app.py
+
+Open:
+
+http://127.0.0.1:5000/
+
+17. Recommended Demo Workflow
+
+The application can be demonstrated in approximately 3–5 minutes:
+
+Open the dashboard.
+
+Import the sample ledger and statement files.
+
+Start a reconciliation run.
+
+Show the summary counts.
+
+Open an exact match.
+
+Open a transaction with a tolerance-level difference.
+
+Open a genuine discrepancy and show the field-level comparison.
+
+Open an unmatched transaction.
+
+Manually resolve it.
+
+Run reconciliation again and show that the decision persists.
+
+Import a correction file.
+
+Show the correction/version history.
+
+This demonstrates the application's main value without requiring a long walkthrough.
+
+18. Sample Data
+
+The sample files are located under:
+
+data/sample/
+
+They are designed to demonstrate the main scenarios required by the assignment.
+
+ledger_2025-07.csv
+
+Internal ledger transactions.
+
+statement_2025-07.csv
+
+Counterparty statement transactions.
+
+Together they demonstrate:
+
+Exact matches
+
+Amount differences within tolerance
+
+Timestamp differences within tolerance
+
+Genuine discrepancies
+
+Ledger-only transactions
+
+Statement-only transactions
+
+Cancelled transactions
+
+Correction files
+
+ledger_2025-07_correction.csv
+statement_2025-07_correction.csv
+
+These demonstrate correction and version-history behavior.
+
+Malformed file
+
+ledger_2025-07-05_malformed.csv
+
+Contains intentionally invalid rows to demonstrate validation and row-level error handling.
+
+19. Assumptions and Design Decisions
+
+The assignment intentionally leaves some implementation decisions open. The following choices were made to keep the system reliable and understandable.
+
+Timestamp handling
+
+All timestamps are normalized to UTC.
+
+SQLite does not provide a native timezone-aware datetime type, so the application stores normalized UTC values consistently.
+
+A timestamp without an explicit offset is assumed to already represent UTC.
+
+Money and quantities
+
+Decimal is used rather than float to avoid binary floating-point rounding issues during reconciliation.
+
+Status values
+
+Known transaction directions such as BUY, B, SELL, and S are normalized.
+
+Unknown direction values are rejected because guessing a transaction direction could produce an incorrect reconciliation.
+
+Unknown state/status values are preserved rather than silently converted into a generic value.
+
+Database
+
+SQLite was selected because:
+
+The assignment permits any database.
+
+It requires no separate database server.
+
+It keeps setup simple for reviewers.
+
+The application does not require high-volume concurrent writes.
+
+Authentication
+
+Authentication is intentionally out of scope.
+
+The resolver name is collected for the audit trail, but it is not intended to represent a secure authenticated identity.
+
+20. What Was Intentionally Left Out
+
+The application intentionally avoids features that would add complexity without materially improving the take-home submission.
+
+Pagination
+
+The results page currently displays all results for a run.
+
+A production system handling thousands of transactions would use pagination and server-side filtering.
+
+Authentication and authorization
+
+Not included because authentication is outside the scope of the assignment.
+
+Non-CSV formats
+
+Only CSV is supported because that is the format required by the assignment.
+
+Full migration framework
+
+A lightweight migration mechanism is included instead of adding a larger migration dependency.
+
+For a longer-lived production application, Alembic would be a natural next step.
+
+Reverting a correction using an identical historical file
+
+As described above, exact duplicate-file detection intentionally prevents an earlier identical file from being reprocessed.
+
+21. Future Improvements
+
+If this were developed beyond the take-home assignment, the next improvements would include:
+
+Authentication and role-based authorization
+
+Pagination and search for large reconciliation runs
+
+CSV/PDF export of reconciliation reports
+
+Bulk resolution actions
+
+Ability to edit or undo manual resolutions
+
+More sophisticated matching strategies for sources without shared transaction IDs
+
+PostgreSQL for higher concurrency and production deployment
+
+Alembic migrations
+
+Background processing for large file imports
+
+Audit/event logging for operational traceability
+
+Monitoring and metrics
+
+Additional source adapters for third-party formats
+
+The current implementation deliberately focuses on correctness, explainability, testability, and a complete user workflow rather than attempting to build a full enterprise reconciliation platform.
+
+22. Engineering Takeaways
+
+The main engineering decisions in this project were driven by four principles:
+
+Correctness over cleverness
+
+The reconciliation engine uses deterministic matching and explicit tolerance rules instead of making uncertain guesses.
+
+Explainability
+
+A reconciliation result should tell the user not only that something is wrong, but also which field differs, what each system reported, and how large the difference is.
+
+Auditability
+
+Corrections and manual decisions are persisted so that the system can explain what happened over time.
+
+Testability
+
+The most important business logic is independent of Flask and the database, allowing it to be tested directly with fast unit tests.
+
+Author
+
+Abhi Chavan
+
+GitHub: @behonestabhi
+Email: jeetrc52@gmail.com
+
+Repository: https://github.com/behonestabhi/Reconciliation-app
+
+License
+
+This project was created as a take-home software engineering assignment.
