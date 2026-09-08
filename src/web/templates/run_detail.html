@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Run #{{ run.id }} · Reconciliation{% endblock %}
+{% block content %}
+  <h1>Run #{{ run.id }}</h1>
+  <p class="muted">
+    Started {{ run.started_at.strftime("%Y-%m-%d %H:%M:%S") }} UTC, triggered by {{ run.triggered_by }}.
+    {{ run.cancelled_excluded_count }} cancelled transaction(s) excluded.
+    <a href="{{ url_for('main.dashboard') }}">&larr; back to dashboard</a>
+  </p>
+
+  <div class="filters">
+    <a class="pill {{ 'active' if not status_filter }}" href="{{ url_for('main.run_detail', run_id=run.id, sort=sort) }}">All ({{ run.total_results }})</a>
+    <a class="pill {{ 'active' if status_filter == 'DIFFERS' }}" href="{{ url_for('main.run_detail', run_id=run.id, status='DIFFERS', sort=sort) }}">Differs ({{ run.differs_count }})</a>
+    <a class="pill {{ 'active' if status_filter == 'UNMATCHED_LEDGER' }}" href="{{ url_for('main.run_detail', run_id=run.id, status='UNMATCHED_LEDGER', sort=sort) }}">Unmatched, ours ({{ run.unmatched_ledger_count }})</a>
+    <a class="pill {{ 'active' if status_filter == 'UNMATCHED_STATEMENT' }}" href="{{ url_for('main.run_detail', run_id=run.id, status='UNMATCHED_STATEMENT', sort=sort) }}">Unmatched, counterparty ({{ run.unmatched_statement_count }})</a>
+    <a class="pill {{ 'active' if status_filter == 'MATCHED_WITHIN_TOLERANCE' }}" href="{{ url_for('main.run_detail', run_id=run.id, status='MATCHED_WITHIN_TOLERANCE', sort=sort) }}">Tolerance ({{ run.matched_within_tolerance_count }})</a>
+    <a class="pill {{ 'active' if status_filter == 'MANUALLY_RESOLVED' }}" href="{{ url_for('main.run_detail', run_id=run.id, status='MANUALLY_RESOLVED', sort=sort) }}">Manually resolved ({{ run.manually_resolved_count }})</a>
+    <a class="pill {{ 'active' if status_filter == 'MATCHED' }}" href="{{ url_for('main.run_detail', run_id=run.id, status='MATCHED', sort=sort) }}">Matched ({{ run.matched_count }})</a>
+
+    <form method="get" action="{{ url_for('main.run_detail', run_id=run.id) }}" style="margin-left:auto;">
+      {% if status_filter %}<input type="hidden" name="status" value="{{ status_filter }}">{% endif %}
+      <label style="display:inline; font-size:0.85rem;">Sort:</label>
+      <select name="sort" onchange="this.form.submit()">
+        <option value="status" {{ "selected" if sort == "status" }}>Needs attention first</option>
+        <option value="natural_key" {{ "selected" if sort == "natural_key" }}>Transaction ID</option>
+        <option value="delta" {{ "selected" if sort == "delta" }}>Largest difference</option>
+      </select>
+    </form>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Transaction ID</th>
+        <th>Instrument</th>
+        <th>Status</th>
+        <th>Differing fields</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in results %}
+      <tr class="clickable" onclick="window.location='{{ url_for('main.result_detail', result_id=r.id) }}'">
+        <td>{{ r.natural_key or "\u2014" }}</td>
+        <td>{{ r.instrument or "\u2014" }}</td>
+        <td class="status-{{ r.status }}">{{ r.status_label }}</td>
+        <td>{{ r.diff_fields or "\u2014" }}</td>
+        <td><a href="{{ url_for('main.result_detail', result_id=r.id) }}">View &rarr;</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="muted">No results match this filter.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endblock %}

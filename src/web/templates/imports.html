@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Import files · Reconciliation{% endblock %}
+{% block content %}
+  <h1>Import files</h1>
+  <p class="muted">
+    Upload ledger/statement CSVs. Re-sending an identical file is detected as a duplicate.
+    Re-sending a file where some rows' values changed is applied as a correction, preserving the old values in history.
+  </p>
+
+  <form class="upload" action="{{ url_for('main.do_import') }}" method="post" enctype="multipart/form-data">
+    <input type="file" name="file" accept=".csv" required>
+    <select name="source_system">
+      <option value="">auto-detect format</option>
+      {% for system in known_systems %}
+        <option value="{{ system }}">{{ system }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">Import</button>
+  </form>
+
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>File</th>
+        <th>System</th>
+        <th>Status</th>
+        <th>Imported at (UTC)</th>
+        <th>Rows</th>
+        <th>Created</th>
+        <th>Corrected</th>
+        <th>Unchanged</th>
+        <th>Failed</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for f in files %}
+      <tr>
+        <td>{{ f.id }}</td>
+        <td>{{ f.filename }}{% if f.is_correction %} <span class="muted">(correction)</span>{% endif %}</td>
+        <td>{{ f.source_system }}</td>
+        <td class="status-{{ f.status }}">{{ f.status }}{% if f.error_summary %}<br><span class="muted">{{ f.error_summary }}</span>{% endif %}</td>
+        <td>{{ f.imported_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+        <td>{{ f.row_count }}</td>
+        <td>{{ f.rows_created }}</td>
+        <td>{{ f.rows_corrected }}</td>
+        <td>{{ f.rows_unchanged }}</td>
+        <td>{{ f.rows_failed }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="10" class="muted">No files imported yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endblock %}

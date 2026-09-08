@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{% block title %}Reconciliation{% endblock %}</title>
+  <style>
+    body { font-family: -apple-system, Helvetica, Arial, sans-serif; max-width: 1100px; margin: 2rem auto; color: #1a1a1a; padding: 0 1rem; }
+    h1 { font-size: 1.4rem; }
+    h2 { font-size: 1.1rem; margin-top: 1.6rem; }
+    nav { display: flex; gap: 1.2rem; margin-bottom: 1.4rem; padding-bottom: 0.8rem; border-bottom: 1px solid #e0e0e0; }
+    nav a { color: #1a1a1a; text-decoration: none; font-weight: 600; font-size: 0.95rem; }
+    nav a:hover { text-decoration: underline; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #e0e0e0; font-size: 0.9rem; }
+    th { background: #f5f5f5; }
+    tr.clickable { cursor: pointer; }
+    tr.clickable:hover { background: #fafafa; }
+    a.rowlink { color: inherit; text-decoration: none; display: block; }
+    .status-PROCESSED, .status-MATCHED { color: #0a7a2f; }
+    .status-PROCESSED_WITH_ERRORS, .status-MATCHED_WITHIN_TOLERANCE { color: #b8860b; }
+    .status-FAILED, .status-DIFFERS { color: #b00020; }
+    .status-DUPLICATE { color: #888; }
+    .status-UNMATCHED_LEDGER, .status-UNMATCHED_STATEMENT { color: #c26a00; }
+    .status-MANUALLY_RESOLVED { color: #3355aa; }
+    .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 10px; font-size: 0.8rem; font-weight: 600; background: #eee; }
+    .flash { padding: 0.6rem 1rem; border-radius: 4px; margin-bottom: 1rem; }
+    .flash-success { background: #e6f4ea; color: #0a7a2f; }
+    .flash-error { background: #fdecea; color: #b00020; }
+    form.upload { display: flex; gap: 0.6rem; align-items: center; margin: 1rem 0; }
+    .muted { color: #888; font-size: 0.85rem; }
+    .cards { display: flex; gap: 1rem; flex-wrap: wrap; margin: 1rem 0; }
+    .card { border: 1px solid #e0e0e0; border-radius: 6px; padding: 0.8rem 1.1rem; min-width: 130px; }
+    .card .n { font-size: 1.6rem; font-weight: 700; display: block; }
+    .card .label { font-size: 0.8rem; color: #666; }
+    .filters { display: flex; gap: 0.5rem; align-items: center; margin: 1rem 0; flex-wrap: wrap; }
+    .filters a, .filters select { font-size: 0.85rem; }
+    .pill { padding: 0.25rem 0.7rem; border: 1px solid #ccc; border-radius: 14px; text-decoration: none; color: #333; font-size: 0.85rem; }
+    .pill.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+    .side-by-side { display: flex; gap: 1.5rem; margin-top: 1rem; }
+    .side-by-side > div { flex: 1; border: 1px solid #e0e0e0; border-radius: 6px; padding: 0.8rem 1rem; }
+    .side-by-side h3 { margin-top: 0; font-size: 1rem; }
+    dl.fields { margin: 0; }
+    dl.fields dt { font-size: 0.78rem; color: #888; margin-top: 0.5rem; }
+    dl.fields dd { margin: 0; font-size: 0.95rem; }
+    .diff-row td.significant { color: #b00020; font-weight: 600; }
+    .diff-row td.tolerable { color: #b8860b; }
+    button, input[type=submit] { cursor: pointer; }
+    fieldset { border: 1px solid #e0e0e0; border-radius: 6px; margin-top: 1.2rem; }
+    legend { font-weight: 600; font-size: 0.9rem; padding: 0 0.4rem; }
+    label { display: block; font-size: 0.85rem; margin-top: 0.6rem; }
+    input[type=text], textarea, select { width: 100%; padding: 0.35rem; margin-top: 0.2rem; box-sizing: border-box; }
+    .resolve-form { max-width: 480px; }
+  </style>
+</head>
+<body>
+  <nav>
+    <a href="{{ url_for('main.dashboard') }}">Dashboard</a>
+    <a href="{{ url_for('main.imports') }}">Import files</a>
+  </nav>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <div class="flash flash-{{ category }}">{{ message }}</div>
+    {% endfor %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</body>
+</html>

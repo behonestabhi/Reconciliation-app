@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}Result #{{ id }} · Reconciliation{% endblock %}
+{% block content %}
+  <h1>Transaction detail</h1>
+  <p class="muted">
+    <a href="{{ url_for('main.run_detail', run_id=run_id) }}">&larr; back to run #{{ run_id }}</a>
+  </p>
+  <p><span class="badge status-{{ status }}">{{ status_label }}</span></p>
+
+  <div class="side-by-side">
+    <div>
+      <h3>Our ledger</h3>
+      {% if ledger %}
+      <dl class="fields">
+        <dt>Trade ID</dt><dd>{{ ledger.natural_key }}</dd>
+        <dt>Instrument</dt><dd>{{ ledger.instrument }}</dd>
+        <dt>Side</dt><dd>{{ ledger.side }}</dd>
+        <dt>Quantity</dt><dd>{{ ledger.quantity }}</dd>
+        <dt>Price</dt><dd>{{ ledger.price }}</dd>
+        <dt>Gross amount</dt><dd>{{ ledger.gross_amount }}</dd>
+        <dt>Transacted at (UTC)</dt><dd>{{ ledger.transacted_at }}</dd>
+        <dt>State</dt><dd>{{ ledger.state }}</dd>
+      </dl>
+      {% else %}
+      <p class="muted">No ledger transaction &mdash; this row only exists on the counterparty's statement.</p>
+      {% endif %}
+    </div>
+    <div>
+      <h3>Counterparty statement</h3>
+      {% if statement %}
+      <dl class="fields">
+        <dt>Reference</dt><dd>{{ statement.natural_key }}</dd>
+        <dt>Instrument</dt><dd>{{ statement.instrument }}</dd>
+        <dt>Side</dt><dd>{{ statement.side }}</dd>
+        <dt>Quantity</dt><dd>{{ statement.quantity }}</dd>
+        <dt>Price</dt><dd>{{ statement.price }}</dd>
+        <dt>Gross amount</dt><dd>{{ statement.gross_amount }}</dd>
+        <dt>Transacted at (UTC)</dt><dd>{{ statement.transacted_at }}</dd>
+        <dt>State</dt><dd>{{ statement.state }}</dd>
+      </dl>
+      {% else %}
+      <p class="muted">No statement transaction &mdash; this row only exists in our ledger.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if diffs %}
+  <h2>Field-by-field comparison</h2>
+  <table>
+    <thead><tr><th>Field</th><th>Ours</th><th>Counterparty</th><th>Delta</th><th>Tolerance</th><th>Verdict</th></tr></thead>
+    <tbody>
+      {% for d in diffs %}
+      <tr class="diff-row">
+        <td>{{ d.field_name }}</td>
+        <td class="{{ 'significant' if d.is_significant else 'tolerable' }}">{{ d.ledger_value }}</td>
+        <td class="{{ 'significant' if d.is_significant else 'tolerable' }}">{{ d.statement_value }}</td>
+        <td>{{ d.delta or "\u2014" }}</td>
+        <td class="muted">{{ d.tolerance }}</td>
+        <td>{{ "Outside tolerance" if d.is_significant else "Within tolerance" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% elif ledger and statement %}
+  <p class="muted">Every field matches exactly.</p>
+  {% endif %}
+
+  {% if manual_resolution %}
+  <h2>Manual resolution</h2>
+  <p>
+    <strong>{{ "Matched" if manual_resolution.resolution_type == "MATCHED_MANUALLY" else "Accepted as unmatched" }}</strong>
+    by {{ manual_resolution.resolved_by }} on {{ manual_resolution.resolved_at.strftime("%Y-%m-%d %H:%M:%S") }} UTC.
+    {% if manual_resolution.notes %}<br><em>&ldquo;{{ manual_resolution.notes }}&rdquo;</em>{% endif %}
+  </p>
+  {% endif %}
+
+  {% if can_resolve %}
+  <fieldset class="resolve-form">
+    <legend>Resolve this manually</legend>
+    <form method="post" action="{{ url_for('main.resolve_result', result_id=id) }}">
+      <label for="resolved_by">Your name</label>
+      <input type="text" id="resolved_by" name="resolved_by" required placeholder="e.g. alice">
+
+      <label for="notes">Reason / note (optional)</label>
+      <textarea id="notes" name="notes" rows="2" placeholder="e.g. confirmed same trade with counterparty by phone"></textarea>
+
+      {% if candidates %}
+      <label for="counterpart_transaction_id">Match with</label>
+      <select id="counterpart_transaction_id" name="counterpart_transaction_id">
+        <option value="">-- choose a transaction --</option>
+        {% for c in candidates %}
+        <option value="{{ c.transaction_id }}">{{ c.natural_key }} &mdash; {{ c.instrument }} {{ c.side }} {{ c.gross_amount }} ({{ c.transacted_at }})</option>
+        {% endfor %}
+      </select>
+      <button type="submit" name="action" value="match_with">Match with selected transaction</button>
+      {% else %}
+      <p class="muted">No candidate transactions available on the other side to match with in this run.</p>
+      {% endif %}
+
+      <p style="margin-top:0.8rem;">
+        <button type="submit" name="action" value="accept_unmatched">Accept as genuinely unmatched</button>
+      </p>
+    </form>
+  </fieldset>
+  {% endif %}
+
+  {% if ledger_versions|length > 1 or statement_versions|length > 1 %}
+  <h2>Correction history</h2>
+  {% if ledger_versions|length > 1 %}
+  <h3>Our ledger</h3>
+  <table>
+    <thead><tr><th>Version</th><th>Quantity</th><th>Price</th><th>Gross amount</th><th>Source file</th><th>Effective from</th><th>Effective to</th></tr></thead>
+    <tbody>
+      {% for v in ledger_versions %}
+      <tr>
+        <td>{{ v.version_number }}{% if v.is_current %} (current){% endif %}</td>
+        <td>{{ v.quantity }}</td>
+        <td>{{ v.price }}</td>
+        <td>{{ v.gross_amount }}</td>
+        <td>{{ v.source_filename }}</td>
+        <td>{{ v.effective_from }}</td>
+        <td>{{ v.effective_to or "\u2014" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if statement_versions|length > 1 %}
+  <h3>Counterparty statement</h3>
+  <table>
+    <thead><tr><th>Version</th><th>Quantity</th><th>Price</th><th>Gross amount</th><th>Source file</th><th>Effective from</th><th>Effective to</th></tr></thead>
+    <tbody>
+      {% for v in statement_versions %}
+      <tr>
+        <td>{{ v.version_number }}{% if v.is_current %} (current){% endif %}</td>
+        <td>{{ v.quantity }}</td>
+        <td>{{ v.price }}</td>
+        <td>{{ v.gross_amount }}</td>
+        <td>{{ v.source_filename }}</td>
+        <td>{{ v.effective_from }}</td>
+        <td>{{ v.effective_to or "\u2014" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% endif %}
+{% endblock %}

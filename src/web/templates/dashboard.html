@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · Reconciliation{% endblock %}
+{% block content %}
+  <h1>Reconciliation dashboard</h1>
+  <p class="muted">
+    {{ import_counts.ledger_transactions }} ledger transaction(s) and
+    {{ import_counts.statement_transactions }} statement transaction(s) currently imported.
+    <a href="{{ url_for('main.imports') }}">Import more</a>.
+  </p>
+
+  <form method="post" action="{{ url_for('main.start_run') }}" style="margin: 1rem 0;">
+    <label for="triggered_by" style="display:inline; font-size:0.85rem;">Your name (for the run log)</label><br>
+    <input type="text" id="triggered_by" name="triggered_by" placeholder="e.g. alice" style="width:220px; display:inline-block;">
+    <button type="submit">Run reconciliation now</button>
+  </form>
+
+  {% if latest_run %}
+    <h2>Latest run &mdash; #{{ latest_run.id }} ({{ latest_run.started_at.strftime("%Y-%m-%d %H:%M:%S") }} UTC)</h2>
+    <div class="cards">
+      <div class="card"><span class="n">{{ latest_run.matched_count }}</span><span class="label">Matched</span></div>
+      <div class="card"><span class="n">{{ latest_run.matched_within_tolerance_count }}</span><span class="label">Matched (tolerance)</span></div>
+      <div class="card"><span class="n" style="color:#b00020;">{{ latest_run.differs_count }}</span><span class="label">Differs</span></div>
+      <div class="card"><span class="n" style="color:#c26a00;">{{ latest_run.unmatched_ledger_count }}</span><span class="label">Unmatched (ours)</span></div>
+      <div class="card"><span class="n" style="color:#c26a00;">{{ latest_run.unmatched_statement_count }}</span><span class="label">Unmatched (counterparty)</span></div>
+      <div class="card"><span class="n" style="color:#3355aa;">{{ latest_run.manually_resolved_count }}</span><span class="label">Manually resolved</span></div>
+    </div>
+    <p class="muted">
+      {{ latest_run.cancelled_excluded_count }} cancelled transaction(s) excluded from comparison.
+      <a href="{{ url_for('main.run_detail', run_id=latest_run.id) }}">Inspect this run &rarr;</a>
+    </p>
+  {% else %}
+    <p class="muted">No reconciliation runs yet. <a href="{{ url_for('main.imports') }}">Import files</a> first, then run reconciliation.</p>
+  {% endif %}
+
+  <h2>Run history</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Started (UTC)</th>
+        <th>Triggered by</th>
+        <th>Matched</th>
+        <th>Tolerance</th>
+        <th>Differs</th>
+        <th>Unmatched (ours)</th>
+        <th>Unmatched (counterparty)</th>
+        <th>Manually resolved</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for run in runs %}
+      <tr class="clickable" onclick="window.location='{{ url_for('main.run_detail', run_id=run.id) }}'">
+        <td>{{ run.id }}</td>
+        <td>{{ run.started_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+        <td>{{ run.triggered_by }}</td>
+        <td>{{ run.matched_count }}</td>
+        <td>{{ run.matched_within_tolerance_count }}</td>
+        <td>{{ run.differs_count }}</td>
+        <td>{{ run.unmatched_ledger_count }}</td>
+        <td>{{ run.unmatched_statement_count }}</td>
+        <td>{{ run.manually_resolved_count }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="9" class="muted">No runs yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endblock %}
